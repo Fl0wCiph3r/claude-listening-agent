@@ -1,29 +1,19 @@
-"""Categorize Reddit posts into actionable buckets."""
+"""Categorize posts/findings into actionable buckets."""
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
 
+from .models import Finding, Category
 from .reddit_monitor import RedditPost
-
-
-class Category(Enum):
-    """Content categories for analysis."""
-
-    QUESTION = "question"  # Content ideas
-    PAIN_POINT = "pain_point"  # Product opportunities
-    SUCCESS_STORY = "success"  # Competitive intelligence
-    UNCATEGORIZED = "uncategorized"
 
 
 @dataclass
 class CategorizedPost:
-    """A post with its assigned category and reasoning."""
-
+    """A post with its assigned category and reasoning (for Reddit backwards compat)."""
     post: RedditPost
     category: Category
-    confidence: float  # 0-1 score
-    signals: list = field(default_factory=list)  # Why this category
+    confidence: float
+    signals: list = field(default_factory=list)
 
 
 class Categorizer:
@@ -45,7 +35,7 @@ class Categorizer:
         r"\b(any experience with|experience using|tried using)\b",
     ]
 
-    # Pain point / struggle indicators - "struggling with", "can't figure out", "frustrated"
+    # Pain point / struggle indicators
     PAIN_PATTERNS = [
         r"\b(struggling|frustrated|annoyed|irritated|difficult|hard|impossible|can't|cannot|couldn't)\b",
         r"\b(problem|issue|bug|error|broken|doesn't work|not working|stopped working)\b",
@@ -62,7 +52,7 @@ class Categorizer:
         r"\b(can't figure out|don't understand|makes no sense)\b",
     ]
 
-    # Success story indicators - "made $X", "launched", "revenue", "MRR"
+    # Success story indicators
     SUCCESS_PATTERNS = [
         r"\b(made|earned|generated|hit|reached|crossed)\b.*\$[\d,]+",
         r"\$[\d,]+[kK]?\s*(MRR|ARR|revenue|sales|profit)",
@@ -108,34 +98,36 @@ class Categorizer:
         if not matches:
             return 0.0, []
 
-        # Score based on number of matches (diminishing returns)
         score = min(1.0, len(matches) * 0.25)
         return score, matches
 
-    def categorize(self, post: RedditPost) -> CategorizedPost:
-        """Categorize a single post."""
-        text = post.full_text
+    def categorize_finding(self, finding: Finding) -> Finding:
+        """Categorize a unified Finding object (in-place modification)."""
+        text = finding.full_text
 
-        # Also consider top comments in categorization
-        comments_text = " ".join(c.get("body", "") for c in post.top_comments)
-        full_analysis_text = f"{text} {comments_text}"
+        # Include replies in analysis
+        replies_text = " ".join(
+            r.get("body", "") if isinstance(r, dict) else str(r)
+            for r in finding.replies
+        )
+        full_text = f"{text} {replies_text}"
 
         # Score each category
         question_score, question_signals = self._score_patterns(
             text, self.question_patterns
         )
         pain_score, pain_signals = self._score_patterns(
-            full_analysis_text, self.pain_patterns
+            full_text, self.pain_patterns
         )
         success_score, success_signals = self._score_patterns(
-            full_analysis_text, self.success_patterns
+            full_text, self.success_patterns
         )
 
-        # Boost question score if title ends with ?
-        if post.title.strip().endswith("?"):
+        # Boost question score if ends with ?
+        if finding.title.strip().endswith("?") or finding.body.strip().endswith("?"):
             question_score = min(1.0, question_score + 0.4)
             if "?" not in question_signals:
-                question_signals.insert(0, "title ends with ?")
+                question_signals.insert(0, "ends with ?")
 
         # Boost success score for money mentions
         money_pattern = re.compile(r"\$[\d,]+[kK]?")
@@ -149,11 +141,66 @@ class Categorizer:
             (Category.SUCCESS_STORY, success_score, success_signals),
         ]
 
-        # Sort by score descending
         scores.sort(key=lambda x: x[1], reverse=True)
         best_category, best_score, best_signals = scores[0]
 
         # Minimum threshold
+        if best_score < 0.15:
+            finding.category = Category.UNCATEGORIZED
+            finding.category_confidence = 0.0
+            finding.category_signals = []
+        else:
+            finding.category = best_category
+            finding.category_confidence = best_score
+            finding.category_signals = best_signals[:5]
+
+        return finding
+
+    def categorize_findings(self, findings: list[Finding]) -> list[Finding]:
+        """Categorize a list of Finding objects."""
+        for finding in findings:
+            self.categorize_finding(finding)
+        return findings
+
+    # =========================================================================
+    # Reddit-specific methods (backwards compatibility)
+    # =========================================================================
+
+    def categorize(self, post: RedditPost) -> CategorizedPost:
+        """Categorize a single Reddit post (legacy method)."""
+        text = post.full_text
+
+        comments_text = " ".join(c.get("body", "") for c in post.top_comments)
+        full_analysis_text = f"{text} {comments_text}"
+
+        question_score, question_signals = self._score_patterns(
+            text, self.question_patterns
+        )
+        pain_score, pain_signals = self._score_patterns(
+            full_analysis_text, self.pain_patterns
+        )
+        success_score, success_signals = self._score_patterns(
+            full_analysis_text, self.success_patterns
+        )
+
+        if post.title.strip().endswith("?"):
+            question_score = min(1.0, question_score + 0.4)
+            if "?" not in question_signals:
+                question_signals.insert(0, "title ends with ?")
+
+        money_pattern = re.compile(r"\$[\d,]+[kK]?")
+        if money_pattern.search(text):
+            success_score = min(1.0, success_score + 0.2)
+
+        scores = [
+            (Category.QUESTION, question_score, question_signals),
+            (Category.PAIN_POINT, pain_score, pain_signals),
+            (Category.SUCCESS_STORY, success_score, success_signals),
+        ]
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+        best_category, best_score, best_signals = scores[0]
+
         if best_score < 0.15:
             return CategorizedPost(
                 post=post,
@@ -166,13 +213,13 @@ class Categorizer:
             post=post,
             category=best_category,
             confidence=best_score,
-            signals=best_signals[:5],  # Top 5 signals
+            signals=best_signals[:5],
         )
 
     def categorize_all(
         self, posts: list[RedditPost]
     ) -> dict[Category, list[CategorizedPost]]:
-        """Categorize all posts and group by category."""
+        """Categorize all Reddit posts and group by category (legacy method)."""
         results = {
             Category.QUESTION: [],
             Category.PAIN_POINT: [],
@@ -184,7 +231,6 @@ class Categorizer:
             categorized = self.categorize(post)
             results[categorized.category].append(categorized)
 
-        # Sort each category by confidence then score
         for category in results:
             results[category].sort(
                 key=lambda x: (x.confidence, x.post.score), reverse=True

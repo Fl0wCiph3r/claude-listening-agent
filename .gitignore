@@ -16,6 +16,10 @@ dist/
 # Reports (optional - uncomment to ignore)
 # reports/*.md
 
+# Logs
+*.log
+listener.log
+
 # IDE
 .vscode/
 .idea/
