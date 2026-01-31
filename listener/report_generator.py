@@ -158,7 +158,7 @@ class ReportGenerator:
         if save:
             filename = f"reddit_report_{date_str}.md"
             filepath = self.output_dir / filename
-            filepath.write_text(report)
+            filepath.write_text(report, encoding='utf-8')
             print(f"\nReport saved to: {filepath}")
 
         return report

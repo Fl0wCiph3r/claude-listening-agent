@@ -246,7 +246,7 @@ class CompleteReportGenerator:
         if save:
             filename = f"complete_report_{date_str}.md"
             filepath = self.output_dir / filename
-            filepath.write_text(report_content)
+            filepath.write_text(report_content, encoding='utf-8')
             print(f"\nReport saved to: {filepath}")
 
         return report_content
