@@ -30,18 +30,29 @@ class ReportGenerator:
         lines.append("")
 
         # Metadata
-        lines.append(f"**Subreddit:** r/{post.subreddit} | **Score:** {post.score} | **Author:** u/{post.author}")
-        lines.append(f"**Posted:** {post.created_utc.strftime('%Y-%m-%d %H:%M UTC')}")
+        lines.append(f"**Subreddit:** r/{post.subreddit} | **Score:** {post.score} | **Comments:** {post.num_comments}")
+        lines.append(f"**Author:** u/{post.author} | **Posted:** {post.created_utc.strftime('%Y-%m-%d %H:%M UTC')}")
         lines.append(f"**Keywords:** {', '.join(post.matched_keywords)}")
         lines.append(f"**Link:** [{post.url}]({post.url})")
         lines.append("")
 
         # Body preview (truncated)
-        body = post.body if post.is_comment else post.body or "(No body text)"
-        if len(body) > 500:
-            body = body[:500] + "..."
+        body = post.body if post.is_comment else post.body or ""
         if body.strip():
+            if len(body) > 500:
+                body = body[:500] + "..."
             lines.append("> " + body.replace("\n", "\n> "))
+            lines.append("")
+
+        # Top comments
+        if post.top_comments:
+            lines.append("**Top Comments:**")
+            for i, comment in enumerate(post.top_comments[:3], 1):
+                comment_body = comment.get("body", "")[:200]
+                if len(comment.get("body", "")) > 200:
+                    comment_body += "..."
+                score = comment.get("score", 0)
+                lines.append(f"- ({score} pts) {comment_body}")
             lines.append("")
 
         # Categorization signals

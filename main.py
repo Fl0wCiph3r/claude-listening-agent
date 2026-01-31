@@ -2,85 +2,47 @@
 """
 Reddit Listener Agent - Monitor online discussions about AI and digital products.
 
+This version uses web scraping (no Reddit API required).
+
 Usage:
     python main.py              # Run full scan and generate report
-    python main.py --no-comments # Skip comment scanning (faster)
-    python main.py --dry-run    # Test connection without full scan
+    python main.py --no-comments # Skip comment scraping (faster)
+    python main.py --quick      # Quick mode: fewer pages, no comments
 """
 
 import argparse
 import sys
-import os
 
 from listener import RedditMonitor, Categorizer, ReportGenerator
 from listener.categorizer import Category
 
 
-def check_credentials():
-    """Verify Reddit API credentials are set."""
-    required = ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"]
-    missing = [var for var in required if not os.environ.get(var)]
-
-    if missing:
-        print("Error: Missing Reddit API credentials!")
-        print()
-        print("Please set the following environment variables:")
-        for var in missing:
-            print(f"  export {var}=your_value")
-        print()
-        print("To get Reddit API credentials:")
-        print("  1. Go to https://www.reddit.com/prefs/apps")
-        print("  2. Click 'create another app...'")
-        print("  3. Select 'script' as the app type")
-        print("  4. Use http://localhost:8080 as the redirect URI")
-        print("  5. Copy the client ID (under the app name) and secret")
-        print()
-        print("Or copy .env.example to .env and fill in your values:")
-        print("  cp .env.example .env")
-        print("  # Edit .env with your credentials")
-        print("  source .env")
-        return False
-
-    return True
-
-
-def dry_run():
-    """Test Reddit API connection."""
-    print("Testing Reddit API connection...")
-    try:
-        monitor = RedditMonitor()
-        # Try to access Reddit
-        subreddit = monitor.reddit.subreddit("test")
-        _ = subreddit.display_name
-        print("Success! Reddit API connection is working.")
-        return True
-    except Exception as e:
-        print(f"Error connecting to Reddit: {e}")
-        return False
-
-
-def run_scan(include_comments: bool = True):
+def run_scan(include_comments: bool = True, quick: bool = False):
     """Run the full scan and generate report."""
     print("=" * 60)
-    print("Reddit Listener Agent")
+    print("  Reddit Listener Agent (Web Scraping)")
     print("=" * 60)
     print()
 
+    if quick:
+        print("Quick mode enabled (fewer pages, no comments)")
+        print()
+        include_comments = False
+
     # Initialize components
-    monitor = RedditMonitor()
+    scraper = RedditMonitor()
     categorizer = Categorizer()
     reporter = ReportGenerator()
 
     # Fetch posts
-    print("Fetching posts from Reddit...")
+    posts = scraper.fetch_all(include_comments=include_comments)
     print()
-    posts = monitor.fetch_all(include_comments=include_comments)
-    print()
-    print(f"Total relevant items found: {len(posts)}")
+    print(f"Total relevant posts found: {len(posts)}")
     print()
 
     if not posts:
-        print("No matching posts found. Try adjusting keywords or time range.")
+        print("No matching posts found. The subreddits may be slow or")
+        print("try adjusting keywords in config.py")
         return
 
     # Categorize
@@ -89,14 +51,18 @@ def run_scan(include_comments: bool = True):
 
     # Print summary
     print()
-    print("Results:")
-    print(f"  - Questions (Content Ideas): {len(categorized[Category.QUESTION])}")
-    print(f"  - Pain Points (Product Opportunities): {len(categorized[Category.PAIN_POINT])}")
-    print(f"  - Success Stories (Competitive Intel): {len(categorized[Category.SUCCESS_STORY])}")
+    print("=" * 40)
+    print("RESULTS SUMMARY")
+    print("=" * 40)
+    print(f"  Questions (Content Ideas):      {len(categorized[Category.QUESTION])}")
+    print(f"  Pain Points (Product Opps):     {len(categorized[Category.PAIN_POINT])}")
+    print(f"  Success Stories (Comp Intel):   {len(categorized[Category.SUCCESS_STORY])}")
+    print(f"  Uncategorized:                  {len(categorized[Category.UNCATEGORIZED])}")
+    print("=" * 40)
     print()
 
     # Generate report
-    print("Generating report...")
+    print("Generating markdown report...")
     reporter.generate(categorized)
 
     print()
@@ -106,37 +72,34 @@ def run_scan(include_comments: bool = True):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Monitor Reddit for AI and digital product discussions"
+        description="Monitor Reddit for AI and digital product discussions (no API required)"
     )
     parser.add_argument(
         "--no-comments",
         action="store_true",
-        help="Skip scanning comments (faster but less comprehensive)",
+        help="Skip scraping comments (faster but less context)",
     )
     parser.add_argument(
-        "--dry-run",
+        "--quick",
         action="store_true",
-        help="Test Reddit API connection without running full scan",
+        help="Quick mode: fewer pages per subreddit, no comments",
     )
 
     args = parser.parse_args()
 
-    # Check credentials
-    if not check_credentials():
-        sys.exit(1)
-
-    if args.dry_run:
-        success = dry_run()
-        sys.exit(0 if success else 1)
-
     # Run the scan
     try:
-        run_scan(include_comments=not args.no_comments)
+        run_scan(
+            include_comments=not args.no_comments,
+            quick=args.quick,
+        )
     except KeyboardInterrupt:
-        print("\nScan interrupted.")
+        print("\n\nScan interrupted by user.")
         sys.exit(1)
     except Exception as e:
         print(f"\nError during scan: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
